@@ -1,0 +1,75 @@
+﻿@using Microsoft.AspNetCore.Components.Authorization
+@using TMSleep.Services
+@inject DatabaseService DbService
+@inject AuthenticationStateProvider AuthStateProvider
+
+@if (_isBootstrapping)
+{
+    <!-- 1. The Global Application Loading Screen -->
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background-color: #f8fafc; font-family: sans-serif;">
+        <div class="spinner"></div>
+        <h2 style="color: #4f46e5; margin-top: 20px; font-weight: 600;">Waking up TMSleep...</h2>
+        <p style="color: #64748b; font-size: 0.9rem;">Checking session & databases</p>
+    </div>
+}
+else
+{
+
+<CascadingAuthenticationState>
+    <Router AppAssembly="@typeof(App).Assembly">
+        <Found Context="routeData">
+            <AuthorizeRouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)">
+                <NotAuthorized>
+                    <TMSleep.Components.Pages.Login /> 
+                </NotAuthorized>
+            </AuthorizeRouteView>
+        </Found>
+        <NotFound>
+            <LayoutView Layout="@typeof(MainLayout)">
+                <p>Page not found.</p>
+            </LayoutView>
+        </NotFound>
+    </Router>
+</CascadingAuthenticationState>
+
+            }
+
+@code {
+    private bool _isBootstrapping = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await DbService.AppStartupSequenceAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[App Bootstrap Error]: {ex.Message}");
+        }
+        finally
+        {
+            _isBootstrapping = false;
+        }
+    }
+}
+
+<style>
+    .spinner {
+        border: 4px solid rgba(0, 0, 0, 0.1);
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        border-left-color: #4f46e5;
+        animation: spin 1s linear infinite;
+    }
+    @@keyframes spin {
+        0% {
+            transform: rotate(0deg);
+        }
+
+        100% {
+            transform: rotate(360deg);
+        }
+    }
+</style>

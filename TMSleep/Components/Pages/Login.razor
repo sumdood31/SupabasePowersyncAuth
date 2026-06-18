@@ -1,0 +1,73 @@
+﻿@page "/login"
+@using TMSleep.Services
+@inject DatabaseService DbService
+@inject NavigationManager Nav
+
+<div class="p-6 max-w-sm mx-auto bg-white rounded-xl shadow-md space-y-4 mt-10">
+    <h1 class="text-2xl font-bold text-center text-indigo-600">TMSleep Login</h1>
+
+    <div>
+        <label class="block text-sm font-medium text-gray-700">Email</label>
+        <input @bind="email" type="email" class="mt-1 block w-full border rounded-md p-2" />
+    </div>
+
+    <div>
+        <label class="block text-sm font-medium text-gray-700">Password</label>
+        <input @bind="password" type="password" class="mt-1 block w-full border rounded-md p-2" />
+    </div>
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <p class="text-red-500 text-xs italic">@errorMessage</p>
+    }
+
+    <button @onclick="HandleLogin" class="w-full bg-indigo-600 text-white p-2 rounded-md hover:bg-indigo-700">
+        @(loading ? "Logging in..." : "Login")
+    </button>
+</div>
+
+<nav class="nav flex-column">
+    <div class="nav-item px-3">
+        <NavLink class="nav-link" href="">
+            <span class="bi bi-house-door-fill-nav-menu" ></span> Schedule - shouldn't work when logged out
+        </NavLink>
+    </div>
+    <div class="nav-item px-3">
+        <NavLink class="nav-link" href="counter">
+            <span class="bi bi-person-fill-nav-menu"></span> Counter should work
+        </NavLink>
+    </div>
+    <div class="nav-item px-3">
+        <NavLink class="nav-link" href="permissions">
+            <span class="bi bi-shield-lock-fill-nav-menu"></span> Permissions - shouldn't work when logged out
+        </NavLink>
+    </div>
+    @* You can keep Counter/Weather for now or remove them *@
+</nav>
+
+@code {
+    private string email = "";
+    private string password = "";
+    private string errorMessage = "";
+    private bool loading = false;
+
+    private async Task HandleLogin()
+    {
+        loading = true;
+        errorMessage = "";
+        try
+        {
+            await DbService.LoginAndSyncAsync(email, password);
+
+            Nav.NavigateTo("/", replace: true);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+}

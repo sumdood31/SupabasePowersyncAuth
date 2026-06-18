@@ -1,0 +1,681 @@
+﻿@page "/"
+@attribute [Authorize]
+@implements IAsyncDisposable
+@inject TMSleep.Services.DatabaseService DbService
+@inject TMSleep.Services.ProfileRepository ProfileRepo
+@inject TMSleep.Services.ScheduleRepository ScheduleRepo
+@inject NavigationManager Nav
+@* @inject TMSleep.Services.IAlarmScheduler Scheduler *@
+
+<div class="page-container">
+
+    <div class="page-header">
+        <div>
+            <h1 class="page-title">Schedule</h1>
+            @if (_profile != null)
+            {
+                <p class="page-subtitle">@_profile.FullName</p>
+            }
+        </div>
+        <button class="btn btn-primary" @onclick="OpenAddModal">+ Add Item</button>
+    </div>
+
+    @if (_isSyncing)
+    {
+        <div class="sync-banner">Syncing…</div>
+    }
+
+    @if (!string.IsNullOrEmpty(_errorMessage))
+    {
+        <div class="alert alert-error">@_errorMessage</div>
+    }
+
+    @if (_schedules.Length == 0)
+    {
+        <div class="empty-state">
+            <p>No schedule items yet.</p>
+            <p>Tap <strong>+ Add Item</strong> to create one.</p>
+        </div>
+    }
+    else
+    {
+        <div class="schedule-list">
+            @foreach (var item in _schedules)
+            {
+                <div class="schedule-card @(item.Enabled == 1 ? "" : "inactive")">
+
+                    <div class="card-header">
+                        <div class="card-title-row">
+                            <span class="card-title">@item.Title</span>
+                            <span class="badge @(item.Enabled == 1 ? "badge-active" : "badge-inactive")">
+                                @(item.Enabled == 1 ? "Active" : "Inactive")
+                            </span>
+                        </div>
+                        <div class="card-actions">
+                            <button class="icon-btn" title="Toggle active"
+                                    @onclick="() => ToggleActiveAsync(item)">
+                                @(item.Enabled == 1 ? "⏸" : "▶")
+                            </button>
+                            <button class="icon-btn" title="Edit"
+                                    @onclick="() => OpenEditModal(item)">
+                                ✏️
+                            </button>
+                            <button class="icon-btn icon-btn-danger" title="Delete"
+                                    @onclick="() => ConfirmDeleteAsync(item)">
+                                🗑
+                            </button>
+                        </div>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(item.Description))
+                    {
+                        <p class="card-description">@item.Description</p>
+                    }
+
+                    <div class="card-times">
+                        <span>🕐 @FormatTime(item.StartTime)</span>
+                        <span class="time-arrow">→</span>
+                        <span>@FormatTime(item.EndTime)</span>
+                    </div>
+
+                </div>
+            }
+        </div>
+    }
+
+</div>
+
+@if (_showModal)
+{
+    <div class="modal-backdrop" @onclick="CloseModal">
+        <div class="modal" @onclick:stopPropagation>
+
+            <div class="modal-header">
+                <h2>@(_editingItem == null ? "Add Schedule Item" : "Edit Schedule Item")</h2>
+                <button class="close-btn" @onclick="CloseModal">✕</button>
+            </div>
+
+            <div class="modal-body">
+
+                <div class="form-group">
+                    <label>Title <span class="required">*</span></label>
+                    <input class="form-input" placeholder="e.g. Morning standup"
+                           @bind="_form.Title" @bind:event="oninput" />
+                </div>
+
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea class="form-input form-textarea"
+                              placeholder="Optional notes…"
+                              @bind="_form.Description" @bind:event="oninput" rows="3" />
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Start Time <span class="required">*</span></label>
+                        <input class="form-input" type="datetime-local"
+                               @bind="_form.StartTimeLocal" />
+                    </div>
+                    <div class="form-group">
+                        <label>End Time <span class="required">*</span></label>
+                        <input class="form-input" type="datetime-local"
+                               @bind="_form.EndTimeLocal" />
+                    </div>
+                </div>
+
+                <div class="form-check">
+                    <input id="is-active" type="checkbox" @bind="_form.IsActive" />
+                    <label for="is-active">Active</label>
+                </div>
+
+                @if (!string.IsNullOrEmpty(_modalError))
+                {
+                    <div class="alert alert-error">@_modalError</div>
+                }
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn btn-ghost" @onclick="CloseModal">Cancel</button>
+                <button class="btn btn-primary"
+                        disabled="@(!CanSave)"
+                        @onclick="SaveAsync">
+                    @(_editingItem == null ? "Add" : "Save Changes")
+                </button>
+            </div>
+
+        </div>
+    </div>
+}
+
+@code {
+
+    private Profile? _profile = null;
+    private Schedule[] _schedules = [];
+    private bool _isSyncing = false;
+    private string _errorMessage = "";
+
+    private bool _showModal = false;
+    private Schedule? _editingItem = null;
+    private string _modalError = "";
+    private FormModel _form = new();
+
+    // Watch cancellation
+    private CancellationTokenSource _cts = new();
+
+
+    protected override async Task OnInitializedAsync()
+    {
+         _profile = await ProfileRepo.GetCurrentUserProfileAsync();
+
+        if (_profile == null)
+        {
+            _errorMessage = "Profile not found. Ensure your sync rules include the profile table.";
+            return;
+        }
+
+        // var raw = await DbService.Db.GetAll<Schedule>("SELECT * FROM schedules LIMIT 1");
+        // if (raw.Length > 0)
+        // {
+        //     var s = raw[0]; 
+        //     Console.WriteLine($"id={s.Id}");
+        //     Console.WriteLine($"user_id={s.UserId}");
+        //     Console.WriteLine($"title={s.Title}");
+        //     Console.WriteLine($"description={s.Description}");
+        //     Console.WriteLine($"type={s.Type}");
+        //     Console.WriteLine($"start_time={s.StartTime}");
+        //     Console.WriteLine($"end_time={s.EndTime}");
+        //     Console.WriteLine($"days_of_week={s.DaysOfWeek}");
+        //     Console.WriteLine($"enabled={s.Enabled}");
+        //     Console.WriteLine($"sound_id={s.SoundId}");
+        //     Console.WriteLine($"volume_max={s.VolumeMax}");
+        //     Console.WriteLine($"volume_ramp_duration={s.VolumeRampDuration}");
+        //     Console.WriteLine($"reminder_offset_mins={s.ReminderOffsetMins}");
+        //     Console.WriteLine($"group_id={s.GroupId}");
+        //     Console.WriteLine($"created_at={s.CreatedAt}");
+        // }
+        // var allSchedules = await ScheduleRepo.GetAllAsync();
+        //Console.WriteLine($"Total schedules in local DB: {allSchedules.Length}");
+
+        _schedules = await ScheduleRepo.GetByProfileIdAsync(_profile.Id);
+        // Start the live watch — re-renders whenever schedule rows change.
+        _ = WatchSchedulesAsync(_cts.Token);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _cts.CancelAsync();
+        _cts.Dispose();
+    }
+
+    // ── Live watch ────────────────────────────────────────────────────
+
+    private async Task WatchSchedulesAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(100, ct);
+            await foreach (var rows in ScheduleRepo.WatchByProfileAsync(_profile!.Id, ct))
+            {
+                _schedules = rows.ToArray();
+                await InvokeAsync(StateHasChanged);
+            }
+            
+           // Scheduler.ScheduleAlarm(new Schedule { Id = "test", Title = "Test Alarm", StartTime = "07:07" });
+
+            //To cancel
+            // Remove from Android system
+            //Scheduler.CancelAlarm(alarm.Id);
+            //Scheduler.CancelAlarm("test");
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal shutdown — component was disposed.
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"Sync watch error: {ex.Message}";
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void OpenAddModal()
+    {
+        _editingItem = null;
+        _form = new FormModel { IsActive = true };
+        _modalError = "";
+        _showModal = true;
+    }
+
+    private void OpenEditModal(Schedule item)
+    {
+        _editingItem = item;
+        _form = new FormModel
+        {
+            Title = item.Title,
+            Description = item.Description,
+            StartTimeLocal = ParseToLocal(item.StartTime),
+            EndTimeLocal = ParseToLocal(item.EndTime),
+            IsActive = Convert.ToBoolean(item.Enabled)
+        };
+        _modalError = "";
+        _showModal = true;
+    }
+
+    private void CloseModal()
+    {
+        _showModal = false;
+        _modalError = "";
+    }
+
+    private bool CanSave =>
+        !string.IsNullOrWhiteSpace(_form.Title) &&
+        _form.StartTimeLocal != default &&
+        _form.EndTimeLocal != default &&
+        _form.EndTimeLocal > _form.StartTimeLocal;
+
+    private async Task SaveAsync()
+    {
+        _modalError = "";
+
+        try
+        {
+            if (_editingItem == null)
+            {
+                // Insert
+                var entity = new Schedule
+                {
+                    UserId = _profile!.Id,
+                    Title = _form.Title.Trim(),
+                    Description = _form.Description.Trim(),
+                    StartTime = _form.StartTimeLocal.ToString("o"),
+                    EndTime = _form.EndTimeLocal.ToString("o"),
+                    Enabled = Convert.ToInt32(_form.IsActive)
+                };
+                await ScheduleRepo.InsertAsync(entity);
+            }
+            else
+            {
+                // Update
+                _editingItem.Title = _form.Title.Trim();
+                _editingItem.Description = _form.Description.Trim();
+                _editingItem.StartTime = _form.StartTimeLocal.ToString("o");
+                _editingItem.EndTime = _form.EndTimeLocal.ToString("o");
+                _editingItem.Enabled = Convert.ToInt32(_form.IsActive);
+                await ScheduleRepo.UpdateAsync(_editingItem);
+            }
+
+            CloseModal();
+        }
+        catch (Exception ex)
+        {
+            _modalError = $"Save failed: {ex.Message}";
+        }
+    }
+
+    private async Task ToggleActiveAsync(Schedule item)
+    {
+        try
+        {
+           await ScheduleRepo.SetActiveAsync(item.Id, item.Enabled == 1 ? 0 : 1);
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"Update failed: {ex.Message}";
+        }
+    }
+
+    private async Task ConfirmDeleteAsync(Schedule item)
+    {
+        var activePage = Application.Current?.Windows.FirstOrDefault()?.Page;
+        bool confirmed = false;
+
+        if (activePage != null)
+        {
+            confirmed = await activePage.DisplayAlertAsync("Delete", $"Delete \"{item.Title}\"?", "Delete", "Cancel");
+        }
+
+        if (!confirmed) return;
+
+        try
+        {
+            await ScheduleRepo.DeleteAsync(item.Id);
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"Delete failed: {ex.Message}";
+        }
+
+    }
+
+    private static string FormatTime(string? iso) =>
+        DateTime.TryParse(iso, out var dt)
+            ? dt.ToLocalTime().ToString("MMM d, h:mm tt")
+            : iso ?? "—";
+
+    private static DateTime ParseToLocal(string? iso) =>
+        DateTime.TryParse(iso, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt)
+            ? dt.ToLocalTime()
+            : DateTime.Now;
+
+    private class FormModel
+    {
+        public string Title { get; set; } = "";
+        public string Description { get; set; } = "";
+        public DateTime StartTimeLocal { get; set; } = DateTime.Now;
+        public DateTime EndTimeLocal { get; set; } = DateTime.Now.AddHours(1);
+        public bool IsActive { get; set; } = true;
+    }
+}
+
+<style>
+    .page-container {
+        padding: 1.5rem;
+        max-width: 720px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+    }
+
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+    }
+
+    .page-title {
+        font-size: 1.75rem;
+        font-weight: 700;
+        color: #111827;
+        margin: 0;
+    }
+
+    .page-subtitle {
+        font-size: 0.9rem;
+        color: #6b7280;
+        margin: 0.25rem 0 0;
+    }
+
+    .sync-banner {
+        background: #eff6ff;
+        color: #1d4ed8;
+        border: 1px solid #bfdbfe;
+        border-radius: 8px;
+        padding: 0.5rem 1rem;
+        font-size: 0.875rem;
+    }
+
+    .alert {
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+        font-size: 0.875rem;
+    }
+
+    .alert-error {
+        background: #fef2f2;
+        color: #b91c1c;
+        border: 1px solid #fecaca;
+    }
+
+    .empty-state {
+        text-align: center;
+        padding: 3rem 1rem;
+        color: #9ca3af;
+    }
+
+    .schedule-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.875rem;
+    }
+
+    .schedule-card {
+        background: white;
+        border: 1.5px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        transition: opacity 0.2s;
+    }
+
+        .schedule-card.inactive {
+            opacity: 0.6;
+        }
+
+    .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+
+    .card-title-row {
+        display: flex;
+        align-items: center;
+        gap: 0.625rem;
+        flex-wrap: wrap;
+    }
+
+    .card-title {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #111827;
+    }
+
+    .badge {
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 0.125rem 0.5rem;
+        border-radius: 99px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .badge-active {
+        background: #dcfce7;
+        color: #15803d;
+    }
+
+    .badge-inactive {
+        background: #f3f4f6;
+        color: #6b7280;
+    }
+
+    .card-actions {
+        display: flex;
+        gap: 0.25rem;
+    }
+
+    .icon-btn {
+        background: transparent;
+        border: none;
+        border-radius: 6px;
+        padding: 0.25rem 0.375rem;
+        cursor: pointer;
+        font-size: 1rem;
+        line-height: 1;
+        transition: background 0.15s;
+    }
+
+        .icon-btn:hover {
+            background: #f3f4f6;
+        }
+
+    .icon-btn-danger:hover {
+        background: #fef2f2;
+    }
+
+    .card-description {
+        font-size: 0.875rem;
+        color: #6b7280;
+        margin: 0;
+    }
+
+    .card-times {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.8rem;
+        color: #4b5563;
+    }
+
+    .time-arrow {
+        color: #9ca3af;
+    }
+
+    .btn {
+        border: none;
+        border-radius: 8px;
+        padding: 0.625rem 1.125rem;
+        font-size: 0.95rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: opacity 0.15s, background 0.15s;
+    }
+
+    .btn-primary {
+        background: #6366f1;
+        color: white;
+    }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #4f46e5;
+        }
+
+    .btn-ghost {
+        background: #f3f4f6;
+        color: #374151;
+    }
+
+        .btn-ghost:hover {
+            background: #e5e7eb;
+        }
+
+    .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.45);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+        z-index: 1000;
+    }
+
+    .modal {
+        background: white;
+        border-radius: 14px;
+        width: 100%;
+        max-width: 480px;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    }
+
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1.25rem 1.5rem 0;
+    }
+
+        .modal-header h2 {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin: 0;
+        }
+
+    .close-btn {
+        background: transparent;
+        border: none;
+        font-size: 1.1rem;
+        cursor: pointer;
+        color: #6b7280;
+        padding: 0.25rem;
+        border-radius: 6px;
+    }
+
+        .close-btn:hover {
+            background: #f3f4f6;
+        }
+
+    .modal-body {
+        padding: 1.25rem 1.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .modal-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.75rem;
+        padding: 0 1.5rem 1.25rem;
+    }
+
+    .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.375rem;
+    }
+
+        .form-group label {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: #374151;
+        }
+
+    .required {
+        color: #dc2626;
+    }
+
+    .form-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.75rem;
+    }
+
+    .form-input {
+        border: 1.5px solid #d1d5db;
+        border-radius: 8px;
+        padding: 0.625rem 0.875rem;
+        font-size: 0.95rem;
+        color: #111827;
+        outline: none;
+        transition: border-color 0.15s;
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+        .form-input:focus {
+            border-color: #6366f1;
+            box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
+        }
+
+    .form-textarea {
+        resize: vertical;
+        font-family: inherit;
+    }
+
+    .form-check {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.9rem;
+        color: #374151;
+    }
+
+        .form-check input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: #6366f1;
+            cursor: pointer;
+        }
+</style>

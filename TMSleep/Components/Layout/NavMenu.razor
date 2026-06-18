@@ -1,0 +1,89 @@
+﻿@using Microsoft.AspNetCore.Components.Authorization
+@inject NavigationManager NavManager
+@inject SupabaseConnector Connector
+
+<div class="menu-container">
+    <div class="menu-brand">My Application</div>
+
+    <nav class="menu-links">
+        <a href="/">Home</a>
+        <AuthorizeView>
+            <Authorized>
+                <a href="/">Schedules</a>
+                <a href="/permissions">Permissions</a>
+                <span class="user-email">Logged in as: @context.User.Identity?.Name</span>
+                <button class="btn-logout" @onclick="HandleLogout">Log Out</button>
+            </Authorized>
+
+            <NotAuthorized>
+                <a href="/counter">Counter</a>
+                <a href="/weather">Weather</a>
+                <button class="btn-login" @onclick="GoToLogin">Log In</button>
+            </NotAuthorized>
+        </AuthorizeView>
+    </nav>
+</div>
+
+@code {
+    private void GoToLogin()
+    {
+        NavManager.NavigateTo("/login");
+    }
+
+    private async Task HandleLogout()
+    {
+        try
+        {
+            await Connector.Logout();
+            
+            // Hard redirect back to your login container or home dashboard
+            NavManager.NavigateTo("/login", replace: true);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[NavMenu] Error clearing user session: {ex.Message}");
+            SecureStorage.Default.Remove("supabase_TMSleep_session");
+        }
+    }
+}
+
+<style>
+    .menu-container {
+        display: flex;
+        justify-content: space-between;
+        padding: 15px;
+        background: #2c3e50;
+        color: white;
+        align-items: center;
+    }
+
+    .menu-links a {
+        color: white;
+        margin-right: 15px;
+        text-decoration: none;
+    }
+
+    .user-email {
+        color: #bdc3c7;
+        font-size: 0.9em;
+        margin-right: 15px;
+    }
+
+    .btn-login {
+        background: #2ecc71;
+        color: white;
+        border: none;
+        padding: 6px 12px;
+        cursor: pointer;
+        border-radius: 4px;
+    }
+
+    .btn-logout {
+        background: #e74c3c;
+        color: white;
+        border: none;
+        padding: 6px 12px;
+        cursor: pointer;
+        border-radius: 4px;
+    }
+</style>

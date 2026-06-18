@@ -1,0 +1,20 @@
+# PowerSync Edition 3 - Sync Streams
+config:
+  edition: 3
+
+streams:
+  # 1. Global Data: Available to every logged-in user
+  global_assets:
+    auto_subscribe: true
+    queries:
+      - SELECT * FROM sounds
+
+  # 2. User Data: Private data synced based on the Supabase User ID
+  user_private_data:
+    auto_subscribe: true
+    queries:
+      # Sync the profile where the ID matches the authenticated user
+      - SELECT * FROM profiles WHERE id = auth.user_id()
+      
+      # Sync the schedules where the user_id matches the authenticated user
+      - SELECT * FROM schedules WHERE user_id = auth.user_id()

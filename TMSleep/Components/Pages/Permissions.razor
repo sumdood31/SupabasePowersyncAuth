@@ -1,0 +1,55 @@
+﻿@page "/permissions"
+@attribute [Authorize]
+@using TMSleep.Services
+@inject IPermissionService PermissionService
+
+<div class="p-6 space-y-6">
+    <h1 class="text-2xl font-bold">App Health Check</h1>
+    <p class="text-gray-600 text-sm">To ensure your TM alarms go off reliably, please enable the following:</p>
+
+    <div class="space-y-4">
+        @RenderPermissionItem("Notifications", status.NotificationsGranted, PermissionService.RequestNotificationPermission)
+        @RenderPermissionItem("Exact Alarms", status.ExactAlarmGranted, PermissionService.RequestExactAlarmPermission)
+        @RenderPermissionItem("Ignore Battery Savings", status.BatteryOptimizationIgnored, PermissionService.RequestBatteryOptimizationExemption)
+        @RenderPermissionItem("Display Over Apps", status.OverlayGranted, PermissionService.RequestOverlayPermission)
+    </div>
+
+    <button @onclick="RefreshStatus" class="w-full mt-8 bg-gray-200 p-3 rounded-lg font-semibold">Check Again</button>
+</div>
+
+@code {
+    private PermissionStatusData status = new(false, false, false, false);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshStatus();
+    }
+
+    private async Task RefreshStatus()
+    {
+        status = await PermissionService.GetAllPermissionsStatus();
+    }
+
+    private async Task HandleRequest(Func<Task> requestTask)
+    {
+        await requestTask();
+        // Give the user time to come back from settings
+        await Task.Delay(1000);
+        await RefreshStatus();
+    }
+
+    @* Reusable snippet for each permission row *@
+    private RenderFragment RenderPermissionItem(string label, bool granted, Func<Task> action) => __builder =>
+    {
+        <div class="flex items-center justify-between p-4 bg-white rounded-xl shadow-sm border @(granted ? "border-green-100" : "border-red-100")">
+            <div class="flex items-center space-x-3">
+                <span class="text-xl">@(granted ? "✅" : "❌")</span>
+                <span class="font-medium">@label</span>
+            </div>
+            @if (!granted)
+            {
+                <button @onclick="() => HandleRequest(action)" class="text-sm bg-indigo-600 text-white px-3 py-1 rounded-full">Enable</button>
+            }
+        </div>
+    };
+}
